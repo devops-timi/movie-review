@@ -99,7 +99,7 @@ jobs:
             else
               cd /app && sudo git pull origin main
             fi
-            printf "PORT=3010\nDB_HOST='"$DB_HOST"'\nDB_PORT=3306\nDB_USER='"$DB_USER"'\nDB_PASSWORD='"$DB_PASS"'" | sudo tee /app/backend/.env > /dev/null
+            printf "PORT=3010\nDB_HOST='"$DB_HOST"'\nDB_HOST='"$DB_HOST"'\nDB_PORT=3306\nDB_USER='"$DB_USER"'\nDB_PASSWORD='"$DB_PASS"'" | sudo tee /app/backend/.env > /dev/null
             mysql --force -h '"$DB_HOST"' -u '"$DB_USER"' -p'"$DB_PASS"' moviedb < /app/database/schema.sql
             cd /app/backend
             sudo npm install
