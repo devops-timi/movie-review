@@ -1,0 +1,63 @@
+name: Terraform Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: terraform-3tier
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan 
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_key_name: ${{ secrets.KEY_NAME }}
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve 
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+
+      - name: Write outputs to GitHub Secrets
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set WEB_INSTANCE_IPS --body "$(terraform output -json web_instance_ips)"
+          gh secret set APP_INSTANCE_IPS --body "$(terraform output -json app_instance_ips)"
+          gh secret set DB_HOST          --body "$(terraform output -raw rds_primary_endpoint)"
+          gh secret set PUBLIC_CLB_DNS   --body "$(terraform output -raw public_clb_dns)"
+          gh secret set INTERNAL_CLB_DNS --body "$(terraform output -raw internal_clb_dns)"
+          gh secret set WEB_SG_ID        --body "$(terraform output -raw web_sg_id)"
+
+      - name: Debug IPs
+        run: |
+          echo '${{ secrets.WEB_INSTANCE_IPS }}' | od -c | head
+
+  
+    
+      

@@ -1,0 +1,124 @@
+name: Deploy Application
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Write SSH key to disk
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/connect.pem
+          chmod 600 ~/.ssh/connect.pem
+          
+
+      - name: Get runner public IP
+        id: ip
+        run: echo "runner_ip=$(curl -s ifconfig.me)/32" >> $GITHUB_OUTPUT
+
+      - name: Add runner IP to web SG
+        run: |
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.WEB_SG_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${{ steps.ip.outputs.runner_ip }}
+
+      - name: Configure web instances
+        run: |
+          WEB_IPS=$(echo '${{ secrets.WEB_INSTANCE_IPS }}' | jq -r '.[]')
+          INTERNAL_CLB="${{ secrets.INTERNAL_CLB_DNS }}"
+          REPO="https://github.com/${{ github.repository }}.git"
+
+          WEB_SCRIPT='
+            set -e
+            sudo apt update -y
+            sudo apt install -y git nginx curl
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt install -y nodejs
+            sudo npm install -g pm2
+            if [ ! -d /app ]; then
+              sudo git clone '"$REPO"' /app
+            else
+              cd /app && sudo git pull origin main
+            fi
+            sudo cp /app/nginx/nginx.conf /etc/nginx/sites-available/movie-review
+            sudo ln -sf /etc/nginx/sites-available/movie-review /etc/nginx/sites-enabled/movie-review
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t
+            sudo systemctl enable nginx
+            sudo systemctl restart nginx
+            cd /app/frontend
+            sudo sed -i "s|INTERNAL-CLB-DNS|'"$INTERNAL_CLB"'|g" pages/index.js
+            sudo npm install
+            sudo npm run build
+            pm2 delete frontend 2>/dev/null || true
+            pm2 start npm --name frontend -- start
+          '
+
+          for HOST in $WEB_IPS; do
+            ssh -i ~/.ssh/connect.pem -o StrictHostKeyChecking=no ubuntu@$HOST bash -s <<< "$WEB_SCRIPT"
+          done
+
+      - name: Configure app instances
+        run: |
+          eval $(ssh-agent -s)
+          ssh-add ~/.ssh/connect.pem
+          WEB_IP=$(echo '${{ secrets.WEB_INSTANCE_IPS }}' | jq -r '.[0]')
+          APP_IPS=$(echo '${{ secrets.APP_INSTANCE_IPS }}' | jq -r '.[]')
+          REPO="https://github.com/${{ github.repository }}.git"
+          DB_HOST="${{ secrets.DB_HOST }}"
+          DB_USER="${{ secrets.DB_USERNAME }}"
+          DB_PASS="${{ secrets.DB_PASSWORD }}"
+          PUBLIC_CLB="${{ secrets.PUBLIC_CLB_DNS }}"
+
+          APP_SCRIPT='
+            set -e
+            sudo apt update -y
+            sudo apt install -y git curl mysql-client
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt install -y nodejs
+            sudo npm install -g pm2
+            if [ ! -d /app ]; then
+              sudo git clone '"$REPO"' /app
+            else
+              cd /app && sudo git pull origin main
+            fi
+            printf "PORT=3010\nDB_HOST='"$DB_HOST"'\nDB_PORT=3306\nDB_USER='"$DB_USER"'\nDB_PASSWORD='"$DB_PASS"'" | sudo tee /app/backend/.env > /dev/null
+            mysql --force -h '"$DB_HOST"' -u '"$DB_USER"' -p'"$DB_PASS"' moviedb < /app/database/schema.sql
+            cd /app/backend
+            sudo npm install
+            pm2 delete backend 2>/dev/null || true
+            pm2 start server.js --name backend
+          '
+
+          for APP in $APP_IPS; do
+            ssh -i ~/.ssh/connect.pem -o StrictHostKeyChecking=no \
+                -o ForwardAgent=yes \
+                -o ProxyJump=ubuntu@$WEB_IP \
+                ubuntu@$APP bash -s <<< "$APP_SCRIPT"
+          done
+
+      - name: Remove runner IP from web SG
+        if: always() && steps.ip.outputs.runner_ip != ''
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.WEB_SG_ID }} \
+            --protocol tcp \
+            --port 22 \
+            --cidr ${{ steps.ip.outputs.runner_ip }}
