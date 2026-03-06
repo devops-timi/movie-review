@@ -57,6 +57,7 @@ jobs:
             else
               cd /app && sudo git pull origin main
             fi
+            sudo sed -i "s|INTERNAL-CLB-DNS|'"$INTERNAL_CLB"'|g" /app/nginx/nginx.conf
             sudo cp /app/nginx/nginx.conf /etc/nginx/sites-available/movie-review
             sudo ln -sf /etc/nginx/sites-available/movie-review /etc/nginx/sites-enabled/movie-review
             sudo rm -f /etc/nginx/sites-enabled/default
@@ -64,7 +65,6 @@ jobs:
             sudo systemctl enable nginx
             sudo systemctl restart nginx
             cd /app/frontend
-            sudo sed -i "s|INTERNAL-CLB-DNS|'"$INTERNAL_CLB"'|g" pages/index.js
             sudo npm install
             sudo npm run build
             pm2 delete frontend 2>/dev/null || true

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import styles from '../styles/Home.module.css';
 
-const BACKEND_URL = 'http://INTERNAL-CLB-DNS:3010';
+const BACKEND_URL = '';
 
 export default function Home() {
   const [reviews, setReviews] = useState([]);
